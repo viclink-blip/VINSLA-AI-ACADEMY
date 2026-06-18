@@ -1,0 +1,77 @@
+version: '3.9'
+
+services:
+  # ── PostgreSQL ────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: vinsla_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       vinsla_academy
+      POSTGRES_USER:     vinsla
+      POSTGRES_PASSWORD: vinsla123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vinsla -d vinsla_academy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis (for Celery task queue) ─────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: vinsla_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  # ── Flask Backend ─────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: vinsla_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      FLASK_ENV:          production
+      DATABASE_URL:       postgresql://vinsla:vinsla123@db:5432/vinsla_academy
+      SECRET_KEY:         ${SECRET_KEY:-change-me-in-production}
+      JWT_SECRET_KEY:     ${JWT_SECRET_KEY:-jwt-secret-change-me}
+      ANTHROPIC_API_KEY:  ${ANTHROPIC_API_KEY}
+      MAIL_USERNAME:      ${MAIL_USERNAME}
+      MAIL_PASSWORD:      ${MAIL_PASSWORD}
+      CERTIFICATE_FOLDER: /app/certificates
+      UPLOAD_FOLDER:      /app/uploads
+      APP_URL:            ${APP_URL:-http://localhost:5000}
+    volumes:
+      - certificates:/app/certificates
+      - uploads:/app/uploads
+    ports:
+      - "5000:5000"
+
+  # ── Nginx Reverse Proxy ───────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: vinsla_nginx
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  postgres_data:
+  certificates:
+  uploads:
